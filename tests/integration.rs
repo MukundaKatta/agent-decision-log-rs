@@ -123,7 +123,12 @@ fn chose_listed_option_false_when_hallucinated() {
 fn add_accepts_string_and_str() {
     let mut log = DecisionLog::new();
     log.add(vec!["a"], "a", "rationale", json!({}));
-    log.add(vec!["b".to_string()], "b".to_string(), "r2".to_string(), json!({}));
+    log.add(
+        vec!["b".to_string()],
+        "b".to_string(),
+        "r2".to_string(),
+        json!({}),
+    );
     assert_eq!(log.len(), 2);
 }
 
@@ -186,12 +191,7 @@ fn jsonl_round_trip_single_decision() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("one.jsonl");
     let mut log = DecisionLog::new();
-    let id = log.add(
-        vec!["a", "b"],
-        "a",
-        "because reasons",
-        json!({"turn": 4}),
-    );
+    let id = log.add(vec!["a", "b"], "a", "because reasons", json!({"turn": 4}));
     log.set_outcome(&id, "ok");
     log.to_jsonl(&path).unwrap();
 
