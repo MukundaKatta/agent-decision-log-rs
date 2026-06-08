@@ -341,3 +341,82 @@ fn empty_options_are_allowed() {
     assert_eq!(log.last().unwrap().options.len(), 0);
     assert!(!log.last().unwrap().chose_listed_option());
 }
+
+#[test]
+fn iter_matches_decisions_slice() {
+    let mut log = DecisionLog::new();
+    log.add(vec!["a"], "a", "r1", json!({}));
+    log.add(vec!["b"], "b", "r2", json!({}));
+    let via_iter: Vec<&str> = log.iter().map(|d| d.chosen.as_str()).collect();
+    let via_ref: Vec<&str> = (&log).into_iter().map(|d| d.chosen.as_str()).collect();
+    assert_eq!(via_iter, vec!["a", "b"]);
+    assert_eq!(via_ref, vec!["a", "b"]);
+}
+
+#[test]
+fn hallucinated_flags_off_menu_choices() {
+    let mut log = DecisionLog::new();
+    log.add(vec!["a", "b"], "a", "fine", json!({}));
+    log.add(vec!["a", "b"], "z", "off menu", json!({}));
+    log.add(Vec::<String>::new(), "empty", "no options", json!({}));
+    let flagged: Vec<&str> = log.hallucinated().map(|d| d.chosen.as_str()).collect();
+    assert_eq!(flagged, vec!["z", "empty"]);
+}
+
+#[test]
+fn hallucinated_empty_when_all_choices_listed() {
+    let mut log = DecisionLog::new();
+    log.add(vec!["a", "b"], "a", "r", json!({}));
+    log.add(vec!["c", "d"], "d", "r", json!({}));
+    assert_eq!(log.hallucinated().count(), 0);
+}
+
+#[test]
+fn pending_tracks_unresolved_decisions() {
+    let mut log = DecisionLog::new();
+    let id1 = log.add(vec!["a"], "a", "r", json!({}));
+    let id2 = log.add(vec!["b"], "b", "r", json!({}));
+    log.add(vec!["c"], "c", "r", json!({}));
+    assert_eq!(log.pending().count(), 3);
+    log.set_outcome(&id1, "done");
+    log.set_outcome(&id2, "done");
+    let still_pending: Vec<&str> = log.pending().map(|d| d.chosen.as_str()).collect();
+    assert_eq!(still_pending, vec!["c"]);
+}
+
+#[test]
+fn append_jsonl_creates_and_grows_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stream.jsonl");
+
+    let mut first = DecisionLog::new();
+    first.add(vec!["a"], "a", "r1", json!({"turn": 0}));
+    first.append_jsonl(&path).unwrap();
+
+    let mut second = DecisionLog::new();
+    second.add(vec!["b"], "b", "r2", json!({"turn": 1}));
+    second.append_jsonl(&path).unwrap();
+
+    let loaded = DecisionLog::from_jsonl(&path).unwrap();
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded.decisions[0].chosen, "a");
+    assert_eq!(loaded.decisions[1].chosen, "b");
+}
+
+#[test]
+fn append_jsonl_on_fresh_path_equals_to_jsonl() {
+    let dir = tempfile::tempdir().unwrap();
+    let appended = dir.path().join("appended.jsonl");
+    let written = dir.path().join("written.jsonl");
+
+    let mut log = DecisionLog::new();
+    log.add(vec!["a", "b"], "a", "r", json!({"k": "v"}));
+    log.add(vec!["c"], "c", "r2", json!({}));
+
+    log.append_jsonl(&appended).unwrap();
+    log.to_jsonl(&written).unwrap();
+
+    let a = std::fs::read_to_string(&appended).unwrap();
+    let w = std::fs::read_to_string(&written).unwrap();
+    assert_eq!(a, w);
+}
