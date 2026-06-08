@@ -137,6 +137,11 @@ impl DecisionLog {
         self.decisions.last()
     }
 
+    /// Iterate over the recorded decisions in insertion order.
+    pub fn iter(&self) -> std::slice::Iter<'_, Decision> {
+        self.decisions.iter()
+    }
+
     /// Number of recorded decisions.
     pub fn len(&self) -> usize {
         self.decisions.len()
@@ -147,9 +152,46 @@ impl DecisionLog {
         self.decisions.is_empty()
     }
 
+    /// Decisions whose chosen option was **not** among the listed options.
+    ///
+    /// These flag hallucinated branches: the agent committed to an option it
+    /// never offered itself as a candidate. An empty result means every
+    /// decision stayed within its declared option set.
+    pub fn hallucinated(&self) -> impl Iterator<Item = &Decision> {
+        self.decisions.iter().filter(|d| !d.chose_listed_option())
+    }
+
+    /// Decisions that have no recorded outcome yet.
+    ///
+    /// Useful for spotting branches the agent took but never resolved — the
+    /// loose ends of a run.
+    pub fn pending(&self) -> impl Iterator<Item = &Decision> {
+        self.decisions.iter().filter(|d| d.outcome.is_none())
+    }
+
     /// Write the log as JSONL — one decision object per line.
     pub fn to_jsonl<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
         let file = std::fs::File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        for d in &self.decisions {
+            let line = serde_json::to_string(d)?;
+            writer.write_all(line.as_bytes())?;
+            writer.write_all(b"\n")?;
+        }
+        writer.flush()
+    }
+
+    /// Append the log to a JSONL file, creating it if it does not exist.
+    ///
+    /// Unlike [`to_jsonl`](Self::to_jsonl), which truncates, this preserves any
+    /// existing content and writes each decision as one more line. This suits
+    /// the append-only nature of a decision log: stream new branches onto a
+    /// growing file across multiple agent turns or processes.
+    pub fn append_jsonl<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
         let mut writer = BufWriter::new(file);
         for d in &self.decisions {
             let line = serde_json::to_string(d)?;
@@ -175,6 +217,15 @@ impl DecisionLog {
             decisions.push(decision);
         }
         Ok(Self { decisions })
+    }
+}
+
+impl<'a> IntoIterator for &'a DecisionLog {
+    type Item = &'a Decision;
+    type IntoIter = std::slice::Iter<'a, Decision>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.decisions.iter()
     }
 }
 
@@ -216,5 +267,46 @@ mod tests {
         let mut log = DecisionLog::new();
         log.add(vec!["a", "b"], "c", "made up", json!({}));
         assert!(!log.last().unwrap().chose_listed_option());
+    }
+
+    #[test]
+    fn hallucinated_returns_only_off_menu_choices() {
+        let mut log = DecisionLog::new();
+        log.add(vec!["a", "b"], "a", "in options", json!({}));
+        log.add(vec!["a", "b"], "c", "off menu", json!({}));
+        log.add(vec!["x"], "x", "in options", json!({}));
+        let halluc: Vec<&str> = log.hallucinated().map(|d| d.chosen.as_str()).collect();
+        assert_eq!(halluc, vec!["c"]);
+    }
+
+    #[test]
+    fn pending_returns_only_decisions_without_outcome() {
+        let mut log = DecisionLog::new();
+        let id = log.add(vec!["a"], "a", "r", json!({}));
+        log.add(vec!["b"], "b", "r", json!({}));
+        log.set_outcome(&id, "resolved");
+        let pending: Vec<&str> = log.pending().map(|d| d.chosen.as_str()).collect();
+        assert_eq!(pending, vec!["b"]);
+    }
+
+    #[test]
+    fn iter_yields_decisions_in_order() {
+        let mut log = DecisionLog::new();
+        log.add(vec!["a"], "a", "r", json!({}));
+        log.add(vec!["b"], "b", "r", json!({}));
+        let chosen: Vec<&str> = log.iter().map(|d| d.chosen.as_str()).collect();
+        assert_eq!(chosen, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn into_iter_over_reference_works() {
+        let mut log = DecisionLog::new();
+        log.add(vec!["a"], "a", "r", json!({}));
+        log.add(vec!["b"], "b", "r", json!({}));
+        let mut count = 0;
+        for _d in &log {
+            count += 1;
+        }
+        assert_eq!(count, 2);
     }
 }
